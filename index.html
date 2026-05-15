@@ -128,6 +128,99 @@
     text-shadow: 2px 2px 0 rgba(0,0,0,.35);
   }
 
+  /* ID screen */
+  .id-screen {
+    padding: 44px 40px 36px;
+  }
+  .id-screen h1 {
+    font-family: var(--font-xcond);
+    font-weight: 700;
+    font-size: clamp(48px, 8vw, 88px);
+    line-height: .86;
+    letter-spacing: .01em;
+    text-transform: uppercase;
+    margin: 0 0 14px;
+    color: var(--fg-main);
+  }
+  .id-screen h1 .accent { color: var(--hl); }
+  .id-lede {
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--fg-muted);
+    max-width: 52ch;
+    margin: 0 0 28px;
+  }
+  .id-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 22px;
+  }
+  .field-label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 12px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--fg-subtle);
+  }
+  .field-label .req { color: var(--hl); margin-left: 4px; }
+  .field-label input {
+    background: rgba(0,0,0,.35);
+    border: 2px solid var(--line-strong);
+    color: var(--fg-main);
+    font-family: var(--font-body);
+    font-size: 18px;
+    padding: 13px 16px;
+    border-radius: 12px;
+    outline: none;
+    transition: all .14s;
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 400;
+  }
+  .field-label input:focus {
+    border-color: var(--hl);
+    box-shadow: 0 0 0 4px rgba(71,196,230,.25);
+  }
+  .field-label input.invalid {
+    border-color: #FF7A7A;
+  }
+  .id-privacy {
+    font-size: 12px;
+    color: var(--fg-subtle);
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+
+  .returning-banner {
+    margin: 16px 28px 0;
+    padding: 12px 16px;
+    background: rgba(71, 196, 230, .08);
+    border: 1px solid rgba(71, 196, 230, .22);
+    border-radius: 10px;
+    font-size: 13px;
+    color: var(--fg-main);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .returning-banner strong { color: var(--hl); font-weight: 600; }
+  .returning-banner .not-you {
+    background: none;
+    border: none;
+    color: var(--fg-subtle);
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .returning-banner .not-you:hover { color: var(--hl); }
+
   .grades {
     padding: 24px 28px 32px;
     display: grid;
@@ -628,7 +721,33 @@
 
   <div class="card">
 
-    <div id="screen-grade-select">
+    <!-- ============ STUDENT ID ============ -->
+    <div id="screen-student-id">
+      <div class="id-screen">
+        <h1>Welcome<span class="accent">.</span></h1>
+        <p class="id-lede">Before you start, tell us who you are. Your scores will be saved so your Guide can see your progress over time.</p>
+
+        <div class="id-form">
+          <label class="field-label">
+            Your name <span class="req">*</span>
+            <input type="text" id="studentName" autocomplete="name" placeholder="First and last name" required />
+          </label>
+          <label class="field-label">
+            Email (optional)
+            <input type="email" id="studentEmail" autocomplete="email" placeholder="your@email.com" />
+          </label>
+        </div>
+
+        <button class="start-btn" id="idContinueBtn">Continue →</button>
+        <div class="id-privacy">Your name &amp; email are only used to log your scores for your Guide. Nothing else.</div>
+      </div>
+    </div>
+
+    <div id="screen-grade-select" class="hidden">
+      <div class="returning-banner" id="returningBanner" style="display:none;">
+        <div>Playing as <strong id="returningName"></strong></div>
+        <button class="not-you" id="notYouBtn">Not you?</button>
+      </div>
       <div class="hero">
         <h1>Math Sprint<br/><span class="accent">Challenge</span></h1>
         <p class="lede">Pick your grade. Beat your target before the clock hits zero. <strong>Every rep makes you faster</strong> — the Yet Yeti believes in you.</p>
@@ -762,10 +881,81 @@
   let session = null;
   let selectedGrade = null;
   let timerInterval = null;
+  let studentInfo = null;  // { name, email }
+
+  // =============================================================
+  // AIRTABLE LOGGER
+  // =============================================================
+  const AIRTABLE = {
+    pat:   'patFfQh6p5fG03o8O.e6c537d121e7d79d62fc522f8aaf20cb40673a842691c9dc1670903d4059c095',
+    base:  'apptYWveBDM0VwC68',
+    table: 'Attempts',
+  };
+  const QUEUE_KEY  = 'math-sprint-queue';
+  const STUDENT_KEY = 'math-sprint-student';
+
+  async function postOne(record) {
+    const url = `https://api.airtable.com/v0/${AIRTABLE.base}/${encodeURIComponent(AIRTABLE.table)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${AIRTABLE.pat}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ records: [{ fields: record }] }),
+      keepalive: true,  // completes even if user closes tab
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    return true;
+  }
+
+  function queueRetry(record) {
+    const q = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+    q.push({ record, ts: Date.now() });
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+  }
+
+  async function logAttempt(record) {
+    try {
+      await postOne(record);
+    } catch (err) {
+      console.warn('[log] post failed, queued for retry', err);
+      queueRetry(record);
+    }
+  }
+
+  async function flushQueue() {
+    const q = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+    if (q.length === 0) return;
+    const remaining = [];
+    for (const item of q) {
+      try { await postOne(item.record); }
+      catch { remaining.push(item); }
+    }
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(remaining));
+  }
+
+  function buildLogRecord(passed) {
+    const wrongFmt = session.wrong
+      .map(r => `${r.a}${r.op}${r.b}=${r.userAnswer} (correct: ${r.answer})`)
+      .join('; ');
+    return {
+      'Name':          studentInfo.name,
+      'Email':         studentInfo.email || '',
+      'Grade':         session.track.grade,
+      'Operation':     session.track.label,
+      'Target':        session.track.target,
+      'Correct':       session.correct.length,
+      'Wrong':         session.wrong.length,
+      'Passed':        passed ? 'Yes' : 'No',
+      'Wrong Answers': wrongFmt,
+      'Duration':      DURATION,
+    };
+  }
 
   const $ = id => document.getElementById(id);
 
-  const SCREENS = ['screen-grade-select','screen-op-select','screen-instructions','screen-countdown','screen-game','screen-results'];
+  const SCREENS = ['screen-student-id','screen-grade-select','screen-op-select','screen-instructions','screen-countdown','screen-game','screen-results'];
   function show(id) {
     SCREENS.forEach(s => $(s).classList.add('hidden'));
     $(id).classList.remove('hidden');
@@ -946,6 +1136,9 @@
       $('bannerSub').textContent = `${target - correct} more to hit the goal. Every rep makes you faster.`;
     }
 
+    // Log to Airtable (fire and forget — keepalive ensures it completes)
+    logAttempt(buildLogRecord(passed));
+
     $('rCorrect').textContent = correct;
     $('rWrong').textContent = wrong;
     $('rTime').textContent = '1:00';
@@ -978,6 +1171,66 @@
     }
   }
 
+  // =============================================================
+  // STUDENT ID
+  // =============================================================
+  function saveStudent(name, email) {
+    studentInfo = { name: name.trim(), email: (email || '').trim() };
+    localStorage.setItem(STUDENT_KEY, JSON.stringify(studentInfo));
+  }
+
+  function loadStudent() {
+    const raw = localStorage.getItem(STUDENT_KEY);
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+
+  function clearStudent() {
+    studentInfo = null;
+    localStorage.removeItem(STUDENT_KEY);
+  }
+
+  function renderReturningBanner() {
+    if (studentInfo && studentInfo.name) {
+      $('returningName').textContent = studentInfo.name;
+      $('returningBanner').style.display = 'flex';
+    } else {
+      $('returningBanner').style.display = 'none';
+    }
+  }
+
+  $('idContinueBtn').addEventListener('click', () => {
+    const nameEl = $('studentName');
+    const emailEl = $('studentEmail');
+    const name = nameEl.value.trim();
+    if (!name) {
+      nameEl.classList.add('invalid');
+      nameEl.focus();
+      return;
+    }
+    nameEl.classList.remove('invalid');
+    saveStudent(name, emailEl.value);
+    renderReturningBanner();
+    $('contextEyebrow').textContent = 'Pick your grade';
+    show('screen-grade-select');
+  });
+
+  $('studentName').addEventListener('input', e => e.target.classList.remove('invalid'));
+  $('studentName').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('idContinueBtn').click(); }
+  });
+  $('studentEmail').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('idContinueBtn').click(); }
+  });
+
+  $('notYouBtn').addEventListener('click', () => {
+    clearStudent();
+    $('studentName').value = '';
+    $('studentEmail').value = '';
+    $('contextEyebrow').textContent = 'Welcome';
+    show('screen-student-id');
+  });
+
   $('backToGrade').addEventListener('click', () => {
     $('contextEyebrow').textContent = 'Pick your grade';
     show('screen-grade-select');
@@ -1000,7 +1253,24 @@
     startCountdown();
   });
 
-  renderGradeGrid();
+  // =============================================================
+  // BOOT
+  // =============================================================
+  function boot() {
+    flushQueue();  // retry any failed posts from previous sessions
+    renderGradeGrid();
+    const cached = loadStudent();
+    if (cached && cached.name) {
+      studentInfo = cached;
+      renderReturningBanner();
+      $('contextEyebrow').textContent = 'Pick your grade';
+      show('screen-grade-select');
+    } else {
+      $('contextEyebrow').textContent = 'Welcome';
+      show('screen-student-id');
+    }
+  }
+  boot();
 </script>
 </body>
 </html>
